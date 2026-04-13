@@ -1,6 +1,7 @@
 {
   "name": "ai-employee-backend",
   "version": "1.0.0",
+  "description": "Backend for AI Employee Experience project",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
