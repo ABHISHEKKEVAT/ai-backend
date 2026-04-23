@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const mongoose = require("mongoose");
 const User = require("../models/User");
 
 const transporter = nodemailer.createTransport({
@@ -19,9 +20,25 @@ const signToken = (user) =>
     expiresIn: "1d"
   });
 
+function ensureDatabaseReady(res) {
+  if (process.env.USE_DATABASE !== "true") {
+    res.status(503).json({ msg: "Database is disabled. Set USE_DATABASE=true." });
+    return false;
+  }
+
+  if (mongoose.connection.readyState !== 1) {
+    res.status(503).json({ msg: "Database is not connected. Try again shortly." });
+    return false;
+  }
+
+  return true;
+}
+
 //verify
 router.post("/resend-verify", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return;
+
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ msg: "User not found" });
@@ -48,6 +65,8 @@ router.post("/resend-verify", async (req, res) => {
 // SIGNUP
 router.post("/signup", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return;
+
     const { name, email, password } = req.body;
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ msg: "User already exists" });
@@ -75,6 +94,8 @@ router.post("/signup", async (req, res) => {
 // LOGIN
 router.post("/login", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return;
+
     const { email, password } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ msg: "Invalid credentials" });
@@ -103,6 +124,8 @@ router.post("/login", async (req, res) => {
 // VERIFY EMAIL
 router.get("/verify/:token", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return res.status(503).send("Database unavailable");
+
     const user = await User.findOne({ emailToken: req.params.token });
     if (!user) return res.status(400).send("Invalid or expired token");
 
@@ -120,6 +143,8 @@ router.get("/verify/:token", async (req, res) => {
 // FORGOT PASSWORD
 router.post("/forgot", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return;
+
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user)
@@ -146,6 +171,8 @@ router.post("/forgot", async (req, res) => {
 // RESET PASSWORD
 router.post("/reset/:token", async (req, res) => {
   try {
+    if (!ensureDatabaseReady(res)) return res.status(503).send("Database unavailable");
+
     const user = await User.findOne({
       resetToken: req.params.token,
       resetExpire: { $gt: Date.now() }
