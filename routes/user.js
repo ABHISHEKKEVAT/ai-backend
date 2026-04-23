@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require("multer");
 const path = require("path");
 const mongoose = require("mongoose");
+const { isTrue } = require("../config/env");
 const auth = require("../middleware/auth");
 const User = require("../models/User");
 
@@ -14,7 +15,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 function ensureDatabaseReady(res) {
-  if (process.env.USE_DATABASE !== "true") {
+  if (!isTrue(process.env.USE_DATABASE)) {
     res.status(503).json({ msg: "Database is disabled. Set USE_DATABASE=true." });
     return false;
   }
