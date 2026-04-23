@@ -3,7 +3,7 @@ const cors = require("cors");
 const path = require("path");
 const dotenv = require("dotenv");
 const connectDB = require("./config/db");
-const { isTrue } = require("./config/env");
+const { isDatabaseEnabled } = require("./config/env");
 
 dotenv.config();
 
@@ -16,7 +16,7 @@ const CLIENT_URLS = (process.env.CLIENT_URLS || "")
   .filter(Boolean);
 
 // Toggle DB usage easily while testing
-const USE_DATABASE = isTrue(process.env.USE_DATABASE);
+const USE_DATABASE = isDatabaseEnabled();
 
 // Connect MongoDB only when enabled
 if (USE_DATABASE) {

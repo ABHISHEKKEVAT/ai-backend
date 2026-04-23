@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const mongoose = require("mongoose");
-const { isTrue } = require("../config/env");
+const { isDatabaseEnabled } = require("../config/env");
 const User = require("../models/User");
 
 const transporter = nodemailer.createTransport({
@@ -22,8 +22,8 @@ const signToken = (user) =>
   });
 
 function ensureDatabaseReady(res) {
-  if (!isTrue(process.env.USE_DATABASE)) {
-    res.status(503).json({ msg: "Database is disabled. Set USE_DATABASE=true." });
+  if (!isDatabaseEnabled()) {
+    res.status(503).json({ msg: "Database is disabled. Set USE_DATABASE=true or configure MONGO_URI." });
     return false;
   }
 
