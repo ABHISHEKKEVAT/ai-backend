@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const mongoose = require("mongoose");
 const { isDatabaseEnabled } = require("../config/env");
+const auth = require("../middleware/auth");
 const User = require("../models/User");
 
 const transporter = nodemailer.createTransport({
@@ -33,6 +34,16 @@ function ensureDatabaseReady(res) {
   }
 
   return true;
+}
+
+async function ensureAdminUser(req, res) {
+  const me = await User.findById(req.user.id).select("role");
+  if (!me || me.role !== "admin") {
+    res.status(403).json({ msg: "Admin only" });
+    return null;
+  }
+
+  return me;
 }
 
 //verify
@@ -148,56 +159,77 @@ router.post("/forgot", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const { email } = req.body;
+    const email = String(req.body.email || "").trim();
+    if (!email) {
+      return res.status(400).json({ msg: "Email is required" });
+    }
+
     const user = await User.findOne({ email });
-    if (!user)
-      return res.json({ msg: "If that email exists, a reset link was sent." });
+    if (user) {
+      user.resetToken = undefined;
+      user.resetExpire = undefined;
+      user.resetRequestedAt = new Date();
+      await user.save();
+    }
 
-    const token = crypto.randomBytes(32).toString("hex");
-    user.resetToken = token;
-    user.resetExpire = Date.now() + 15 * 60 * 1000;
-    await user.save();
-
-    await transporter.sendMail({
-      to: user.email,
-      subject: "Password Reset",
-      html: `Reset your password: <a href="${process.env.CLIENT_URL}/reset.html?token=${token}">Click here</a>`
-    });
-
-    res.json({ msg: "Reset link sent if email exists." });
+    return res.json({ msg: "Reset request submitted. Admin will reset your password." });
   } catch (err) {
     console.error(err);
     res.status(500).json({ msg: "Server error" });
   }
 });
 
-// RESET PASSWORD
-router.post("/reset/:token", async (req, res) => {
+// ADMIN RESET PASSWORD (NO EMAIL LINK FLOW)
+router.post("/admin/reset-password", auth, async (req, res) => {
   try {
-    if (!ensureDatabaseReady(res)) return res.status(503).json({ msg: "Database unavailable" });
+    if (!ensureDatabaseReady(res)) return;
 
-    const user = await User.findOne({
-      resetToken: req.params.token,
-      resetExpire: { $gt: Date.now() }
-    });
-    if (!user) return res.status(400).json({ msg: "Invalid or expired token" });
+    const admin = await ensureAdminUser(req, res);
+    if (!admin) return;
 
+    const email = String(req.body.email || "").trim();
+    const userId = String(req.body.userId || "").trim();
     const password = String(req.body.password || "");
-    if (password.length < 6) {
+
+    if (!password || password.length < 6) {
       return res.status(400).json({ msg: "Password must be at least 6 characters" });
     }
 
-    const hash = await bcrypt.hash(password, 10);
-    user.password = hash;
+    const query = {};
+    if (email) {
+      query.email = email;
+    } else if (userId) {
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ msg: "Invalid user ID" });
+      }
+      query._id = userId;
+    } else {
+      return res.status(400).json({ msg: "Email or user ID is required" });
+    }
+
+    const user = await User.findOne(query);
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
     user.resetToken = undefined;
     user.resetExpire = undefined;
+    user.resetRequestedAt = undefined;
     await user.save();
 
-    res.json({ msg: "Password updated successfully." });
+    return res.json({ msg: `Password reset successfully for ${user.email}` });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: "Server error" });
+    return res.status(500).json({ msg: "Server error" });
   }
+});
+
+// RESET PASSWORD
+router.post("/reset/:token", async (req, res) => {
+  return res.status(410).json({
+    msg: "Direct reset links are disabled. Submit a reset request and contact admin."
+  });
 });
 
 module.exports = router;

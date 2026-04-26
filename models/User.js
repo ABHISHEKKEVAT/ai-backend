@@ -19,7 +19,8 @@ const UserSchema = new mongoose.Schema({
   isVerified: { type: Boolean, default: false },
   emailToken: { type: String },
   resetToken: { type: String },
-  resetExpire: { type: Date }
+  resetExpire: { type: Date },
+  resetRequestedAt: { type: Date }
 }, { timestamps: true });
 
 module.exports = mongoose.model("User", UserSchema);
