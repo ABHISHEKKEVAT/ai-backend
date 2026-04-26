@@ -28,6 +28,37 @@ function ensureDatabaseReady(res) {
   return true;
 }
 
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function truncate(value, max) {
+  return normalizeText(value).slice(0, max);
+}
+
+function normalizeJoinDate(value) {
+  const raw = normalizeText(value);
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date;
+}
+
+function normalizeHttpUrl(value) {
+  const raw = normalizeText(value);
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString().slice(0, 200);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // GET ME
 router.get("/me", auth, async (req, res) => {
   try {
@@ -48,8 +79,39 @@ router.post("/me", auth, upload.single("avatar"), async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const update = { name: req.body.name };
+    const currentUser = await User.findById(req.user.id).select("name");
+    if (!currentUser) return res.status(404).json({ msg: "User not found" });
+
+    const update = {};
+
+    if (typeof req.body.name !== "undefined") update.name = truncate(req.body.name, 80);
+    if (typeof req.body.phone !== "undefined") update.phone = truncate(req.body.phone, 32);
+    if (typeof req.body.jobTitle !== "undefined") update.jobTitle = truncate(req.body.jobTitle, 80);
+    if (typeof req.body.department !== "undefined") update.department = truncate(req.body.department, 80);
+    if (typeof req.body.location !== "undefined") update.location = truncate(req.body.location, 120);
+    if (typeof req.body.employeeId !== "undefined") update.employeeId = truncate(req.body.employeeId, 40);
+    if (typeof req.body.managerName !== "undefined") update.managerName = truncate(req.body.managerName, 80);
+    if (typeof req.body.bio !== "undefined") update.bio = truncate(req.body.bio, 800);
+    if (typeof req.body.skills !== "undefined") update.skills = truncate(req.body.skills, 400);
+    if (typeof req.body.linkedinUrl !== "undefined") {
+      const normalizedLinkedinUrl = normalizeHttpUrl(req.body.linkedinUrl);
+      if (typeof normalizedLinkedinUrl === "undefined") {
+        return res.status(400).json({ msg: "Invalid LinkedIn URL" });
+      }
+      update.linkedinUrl = normalizedLinkedinUrl;
+    }
+
+    if (typeof req.body.joinDate !== "undefined") {
+      const normalized = normalizeJoinDate(req.body.joinDate);
+      if (typeof normalized === "undefined") {
+        return res.status(400).json({ msg: "Invalid join date" });
+      }
+      update.joinDate = normalized;
+    }
+
     if (req.file) update.avatar = "/uploads/" + req.file.filename;
+
+    if (!update.name) update.name = currentUser.name;
 
     const user = await User.findByIdAndUpdate(req.user.id, update, { new: true }).select("-password");
     if (!user) return res.status(404).json({ msg: "User not found" });
