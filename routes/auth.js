@@ -174,24 +174,29 @@ router.post("/forgot", async (req, res) => {
 // RESET PASSWORD
 router.post("/reset/:token", async (req, res) => {
   try {
-    if (!ensureDatabaseReady(res)) return res.status(503).send("Database unavailable");
+    if (!ensureDatabaseReady(res)) return res.status(503).json({ msg: "Database unavailable" });
 
     const user = await User.findOne({
       resetToken: req.params.token,
       resetExpire: { $gt: Date.now() }
     });
-    if (!user) return res.status(400).send("Invalid or expired token");
+    if (!user) return res.status(400).json({ msg: "Invalid or expired token" });
 
-    const hash = await bcrypt.hash(req.body.password, 10);
+    const password = String(req.body.password || "");
+    if (password.length < 6) {
+      return res.status(400).json({ msg: "Password must be at least 6 characters" });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
     user.password = hash;
     user.resetToken = undefined;
     user.resetExpire = undefined;
     await user.save();
 
-    res.send("Password updated successfully.");
+    res.json({ msg: "Password updated successfully." });
   } catch (err) {
     console.error(err);
-    res.status(500).send("Server error");
+    res.status(500).json({ msg: "Server error" });
   }
 });
 
