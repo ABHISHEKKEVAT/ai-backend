@@ -9,18 +9,91 @@ const { isDatabaseEnabled } = require("../config/env");
 const auth = require("../middleware/auth");
 const User = require("../models/User");
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+const mailUser = String(process.env.EMAIL_USER || "").trim();
+const mailPass = String(process.env.EMAIL_PASS || "").trim();
+const smtpHost = String(process.env.SMTP_HOST || "").trim();
+const smtpPort = Number(process.env.SMTP_PORT || 587);
+const smtpSecure = String(process.env.SMTP_SECURE || "false").trim().toLowerCase() === "true";
+const mailFrom = String(process.env.EMAIL_FROM || mailUser || "no-reply@example.com").trim();
+const verifyCodeTTLMinutes = Number(process.env.EMAIL_VERIFY_CODE_TTL_MINUTES || 15);
+const defaultClientUrl = String(process.env.CLIENT_URL || "http://127.0.0.1:5500").trim();
+
+const transporter = smtpHost
+  ? nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: mailUser && mailPass ? { user: mailUser, pass: mailPass } : undefined
+    })
+  : nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: mailUser,
+        pass: mailPass
+      }
+    });
 
 const signToken = (user) =>
   jwt.sign({ user: { id: user.id, role: user.role } }, process.env.JWT_SECRET, {
     expiresIn: "1d"
   });
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  // Accepts common providers (gmail/yahoo/etc.) and any valid domain format.
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(value);
+}
+
+function isValidVerificationCode(value) {
+  return /^\d{6}$/.test(String(value || "").trim());
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findUserByEmail(email) {
+  return User.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, "i") });
+}
+
+function isMailConfigured() {
+  return Boolean(mailUser && mailPass);
+}
+
+function buildVerifyLink(emailToken) {
+  return `${defaultClientUrl}/verify.html?token=${encodeURIComponent(emailToken)}`;
+}
+
+function setEmailVerificationSecrets(user) {
+  user.emailToken = crypto.randomBytes(32).toString("hex");
+  user.emailVerifyCode = String(Math.floor(100000 + Math.random() * 900000));
+  user.emailVerifyCodeExpire = new Date(Date.now() + verifyCodeTTLMinutes * 60 * 1000);
+}
+
+async function sendVerificationEmail(user) {
+  if (!isMailConfigured()) {
+    throw new Error("MAIL_NOT_CONFIGURED");
+  }
+
+  const verifyLink = buildVerifyLink(user.emailToken);
+  const codeExpiryText = `${verifyCodeTTLMinutes} minute${verifyCodeTTLMinutes === 1 ? "" : "s"}`;
+
+  await transporter.sendMail({
+    from: mailFrom,
+    to: user.email,
+    subject: "Verify your email address",
+    html: `
+      <p>Hello ${user.name || "there"},</p>
+      <p>Your verification code is <strong>${user.emailVerifyCode}</strong>.</p>
+      <p>This code expires in ${codeExpiryText}.</p>
+      <p>Or verify directly by clicking <a href="${verifyLink}">this link</a>.</p>
+      <p>If you did not create this account, you can ignore this email.</p>
+    `
+  });
+}
 
 function ensureDatabaseReady(res) {
   if (!isDatabaseEnabled()) {
@@ -51,25 +124,35 @@ router.post("/resend-verify", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const { email } = req.body;
-    const user = await User.findOne({ email });
+    if (!isMailConfigured()) {
+      return res.status(500).json({
+        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
+      });
+    }
+
+    const email = normalizeEmail(req.body.email);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
+
+    const user = await findUserByEmail(email);
     if (!user) return res.status(400).json({ msg: "User not found" });
     if (user.isVerified) return res.json({ msg: "Already verified" });
 
-    const emailToken = crypto.randomBytes(32).toString("hex");
-    user.emailToken = emailToken;
+    setEmailVerificationSecrets(user);
     await user.save();
 
-    await transporter.sendMail({
-      to: user.email,
-      subject: "Verify your email",
-      html: `Click <a href="${process.env.CLIENT_URL}/verify.html?token=${emailToken}">here</a> to verify your email.`
-    });
+    await sendVerificationEmail(user);
 
     res.json({ msg: "Verification email resent" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: "Server error" });
+    if (String(err.message || "") === "MAIL_NOT_CONFIGURED") {
+      return res.status(500).json({
+        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
+      });
+    }
+    res.status(500).json({ msg: "Server error while sending verification email" });
   }
 });
 
@@ -79,27 +162,42 @@ router.post("/signup", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const { name, email, password } = req.body;
-    let user = await User.findOne({ email });
+    if (!isMailConfigured()) {
+      return res.status(500).json({
+        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
+      });
+    }
+
+    const name = String(req.body.name || "").trim();
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || "");
+
+    if (!name || !password) {
+      return res.status(400).json({ msg: "Please fill all signup fields" });
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
+
+    let user = await findUserByEmail(email);
     if (user) return res.status(400).json({ msg: "User already exists" });
 
     const hash = await bcrypt.hash(password, 10);
-    const emailToken = crypto.randomBytes(32).toString("hex");
-
-    user = new User({ name, email, password: hash, emailToken });
+    user = new User({ name, email, password: hash });
+    setEmailVerificationSecrets(user);
     await user.save();
 
-    const link = `${process.env.CLIENT_URL}/?verify=${emailToken}`;
-    await transporter.sendMail({
-      to: email,
-      subject: "Verify your email",
-      html: `Click <a href="${process.env.CLIENT_URL}/verify.html?token=${emailToken}">here</a> to verify your email.`
-    });
+    await sendVerificationEmail(user);
 
-    res.json({ msg: "Signup successful. Check your email to verify." });
+    res.json({ msg: "Signup successful. Check your email for verification code." });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: "Server error" });
+    if (String(err.message || "") === "MAIL_NOT_CONFIGURED") {
+      return res.status(500).json({
+        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
+      });
+    }
+    res.status(500).json({ msg: "Server error while creating account" });
   }
 });
 
@@ -108,8 +206,17 @@ router.post("/login", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || "");
+
+    if (!email || !password) {
+      return res.status(400).json({ msg: "Please enter email and password" });
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
+
+    const user = await findUserByEmail(email);
     if (!user) return res.status(400).json({ msg: "Invalid credentials" });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -145,12 +252,55 @@ router.get("/verify/:token", async (req, res) => {
 
     user.isVerified = true;
     user.emailToken = undefined;
+    user.emailVerifyCode = undefined;
+    user.emailVerifyCodeExpire = undefined;
     await user.save();
 
-    res.send("Email verified successfully. You can close this tab.");
+    res.send("Email verified successfully. You can go back and log in.");
   } catch (err) {
     console.error(err);
     res.status(500).send("Server error");
+  }
+});
+
+// VERIFY EMAIL WITH CODE
+router.post("/verify-code", async (req, res) => {
+  try {
+    if (!ensureDatabaseReady(res)) return;
+
+    const email = normalizeEmail(req.body.email);
+    const code = String(req.body.code || "").trim();
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
+    if (!isValidVerificationCode(code)) {
+      return res.status(400).json({ msg: "Please enter a valid 6-digit verification code." });
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user) return res.status(404).json({ msg: "User not found" });
+    if (user.isVerified) return res.json({ msg: "Email already verified." });
+
+    const now = Date.now();
+    const expiresAt = user.emailVerifyCodeExpire ? new Date(user.emailVerifyCodeExpire).getTime() : 0;
+    if (!user.emailVerifyCode || !expiresAt || now > expiresAt) {
+      return res.status(400).json({ msg: "Verification code expired. Please request a new one." });
+    }
+    if (user.emailVerifyCode !== code) {
+      return res.status(400).json({ msg: "Invalid verification code." });
+    }
+
+    user.isVerified = true;
+    user.emailToken = undefined;
+    user.emailVerifyCode = undefined;
+    user.emailVerifyCodeExpire = undefined;
+    await user.save();
+
+    return res.json({ msg: "Email verified successfully." });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ msg: "Server error" });
   }
 });
 
@@ -159,12 +309,15 @@ router.post("/forgot", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    const email = String(req.body.email || "").trim();
+    const email = normalizeEmail(req.body.email);
     if (!email) {
       return res.status(400).json({ msg: "Email is required" });
     }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
 
-    const user = await User.findOne({ email });
+    const user = await findUserByEmail(email);
     if (user) {
       user.resetToken = undefined;
       user.resetExpire = undefined;
@@ -187,7 +340,7 @@ router.post("/admin/reset-password", auth, async (req, res) => {
     const admin = await ensureAdminUser(req, res);
     if (!admin) return;
 
-    const email = String(req.body.email || "").trim();
+    const email = normalizeEmail(req.body.email);
     const userId = String(req.body.userId || "").trim();
     const password = String(req.body.password || "");
 
@@ -195,19 +348,21 @@ router.post("/admin/reset-password", auth, async (req, res) => {
       return res.status(400).json({ msg: "Password must be at least 6 characters" });
     }
 
-    const query = {};
+    let user = null;
     if (email) {
-      query.email = email;
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ msg: "Please enter a valid email address." });
+      }
+      user = await findUserByEmail(email);
     } else if (userId) {
       if (!mongoose.Types.ObjectId.isValid(userId)) {
         return res.status(400).json({ msg: "Invalid user ID" });
       }
-      query._id = userId;
+      user = await User.findById(userId);
     } else {
       return res.status(400).json({ msg: "Email or user ID is required" });
     }
 
-    const user = await User.findOne(query);
     if (!user) {
       return res.status(404).json({ msg: "User not found" });
     }

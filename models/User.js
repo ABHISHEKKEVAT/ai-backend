@@ -18,6 +18,8 @@ const UserSchema = new mongoose.Schema({
   linkedinUrl: { type: String, trim: true, default: "" },
   isVerified: { type: Boolean, default: false },
   emailToken: { type: String },
+  emailVerifyCode: { type: String },
+  emailVerifyCodeExpire: { type: Date },
   resetToken: { type: String },
   resetExpire: { type: Date },
   resetRequestedAt: { type: Date }
