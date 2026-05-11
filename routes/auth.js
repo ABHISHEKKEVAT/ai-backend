@@ -95,6 +95,19 @@ async function sendVerificationEmail(user) {
   });
 }
 
+async function trySendVerificationEmail(user) {
+  try {
+    await sendVerificationEmail(user);
+    return true;
+  } catch (err) {
+    if (String(err.message || "") === "MAIL_NOT_CONFIGURED") {
+      return false;
+    }
+    console.error("Verification email send failed:", err);
+    return false;
+  }
+}
+
 function ensureDatabaseReady(res) {
   if (!isDatabaseEnabled()) {
     res.status(503).json({ msg: "Database is disabled. Set USE_DATABASE=true or configure MONGO_URI." });
@@ -162,12 +175,6 @@ router.post("/signup", async (req, res) => {
   try {
     if (!ensureDatabaseReady(res)) return;
 
-    if (!isMailConfigured()) {
-      return res.status(500).json({
-        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
-      });
-    }
-
     const name = String(req.body.name || "").trim();
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
@@ -179,23 +186,42 @@ router.post("/signup", async (req, res) => {
       return res.status(400).json({ msg: "Please enter a valid email address." });
     }
 
-    let user = await findUserByEmail(email);
-    if (user) return res.status(400).json({ msg: "User already exists" });
-
     const hash = await bcrypt.hash(password, 10);
+    let user = await findUserByEmail(email);
+
+    if (user) {
+      if (user.isVerified) {
+        return res.status(400).json({ msg: "User already exists" });
+      }
+
+      // Allow retry for unverified users: refresh password + verification secrets.
+      user.name = name;
+      user.password = hash;
+      setEmailVerificationSecrets(user);
+      await user.save();
+      const verificationEmailSent = await trySendVerificationEmail(user);
+
+      return res.json({
+        msg: verificationEmailSent
+          ? "Account already created but not verified. Verification code resent."
+          : "Account already created but not verified. Verification email could not be sent right now."
+      });
+    }
+
     user = new User({ name, email, password: hash });
     setEmailVerificationSecrets(user);
     await user.save();
+    const verificationEmailSent = await trySendVerificationEmail(user);
 
-    await sendVerificationEmail(user);
-
-    res.json({ msg: "Signup successful. Check your email for verification code." });
+    return res.json({
+      msg: verificationEmailSent
+        ? "Signup successful. Check your email for verification code."
+        : "Signup successful, but verification email could not be sent right now."
+    });
   } catch (err) {
     console.error(err);
-    if (String(err.message || "") === "MAIL_NOT_CONFIGURED") {
-      return res.status(500).json({
-        msg: "Email service is not configured. Set EMAIL_USER and EMAIL_PASS (app password)."
-      });
+    if (err && err.code === 11000) {
+      return res.status(400).json({ msg: "User already exists" });
     }
     res.status(500).json({ msg: "Server error while creating account" });
   }
