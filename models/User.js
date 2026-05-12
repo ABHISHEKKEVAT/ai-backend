@@ -10,7 +10,7 @@ const UserSchema = new mongoose.Schema({
   jobTitle: { type: String, trim: true, default: "" },
   department: { type: String, trim: true, default: "" },
   location: { type: String, trim: true, default: "" },
-  employeeId: { type: String, trim: true, default: "" },
+  employeeId: { type: String, trim: true, unique: true, index: true },
   managerName: { type: String, trim: true, default: "" },
   joinDate: { type: Date },
   bio: { type: String, trim: true, default: "" },

@@ -28,6 +28,42 @@ function findUserByEmail(email) {
   return User.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, "i") });
 }
 
+function normalizeRole(value) {
+  return String(value || "").trim().toLowerCase() === "admin" ? "admin" : "user";
+}
+
+function getEmployeeIdPrefix(role) {
+  return role === "admin" ? "Adm-" : "Emp-";
+}
+
+function formatEmployeeId(prefix, number) {
+  return `${prefix}${String(number).padStart(3, "0")}`;
+}
+
+async function getNextEmployeeId(role) {
+  const prefix = getEmployeeIdPrefix(role);
+  const regex = new RegExp(`^${escapeRegex(prefix)}\\d+$`, "i");
+  const users = await User.find({ role, employeeId: regex }).select("employeeId").lean();
+
+  let maxIdNumber = 0;
+  for (const user of users) {
+    const match = String(user.employeeId || "").match(/\d+$/);
+    if (!match) continue;
+    const parsed = Number.parseInt(match[0], 10);
+    if (Number.isInteger(parsed) && parsed > maxIdNumber) {
+      maxIdNumber = parsed;
+    }
+  }
+
+  return formatEmployeeId(prefix, maxIdNumber + 1);
+}
+
+function isEmployeeIdDuplicateKeyError(err) {
+  if (!err || err.code !== 11000) return false;
+  if (err.keyPattern && err.keyPattern.employeeId) return true;
+  return String(err.message || "").toLowerCase().includes("employeeid");
+}
+
 function clearVerificationFields(user) {
   user.isVerified = true;
   user.emailToken = undefined;
@@ -72,6 +108,7 @@ router.post("/signup", async (req, res) => {
     const name = String(req.body.name || "").trim();
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
+    const role = normalizeRole(req.body.role);
 
     if (!name || !password) {
       return res.status(400).json({ msg: "Please fill all signup fields" });
@@ -86,23 +123,50 @@ router.post("/signup", async (req, res) => {
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const user = new User({
-      name,
-      email,
-      password: hash,
-      isVerified: true,
-      emailToken: undefined,
-      emailVerifyCode: undefined,
-      emailVerifyCodeExpire: undefined
-    });
+    let user = null;
 
-    await user.save();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const employeeId = await getNextEmployeeId(role);
 
-    return res.json({ msg: "Signup successful." });
+      user = new User({
+        name,
+        email,
+        password: hash,
+        role,
+        employeeId,
+        isVerified: true,
+        emailToken: undefined,
+        emailVerifyCode: undefined,
+        emailVerifyCodeExpire: undefined
+      });
+
+      try {
+        await user.save();
+        break;
+      } catch (saveError) {
+        if (isEmployeeIdDuplicateKeyError(saveError)) {
+          user = null;
+          continue;
+        }
+        throw saveError;
+      }
+    }
+
+    if (!user) {
+      return res.status(500).json({ msg: "Failed to generate employee ID. Please try again." });
+    }
+
+    return res.json({ msg: "Signup successful.", employeeId: user.employeeId, role: user.role });
   } catch (err) {
     console.error(err);
     if (err && err.code === 11000) {
-      return res.status(400).json({ msg: "User already exists" });
+      const duplicateFields = Object.keys(err.keyPattern || {});
+      if (duplicateFields.includes("email")) {
+        return res.status(400).json({ msg: "User already exists" });
+      }
+      if (duplicateFields.includes("employeeId")) {
+        return res.status(409).json({ msg: "Employee ID conflict. Please try signup again." });
+      }
     }
     res.status(500).json({ msg: "Server error while creating account" });
   }
@@ -142,6 +206,7 @@ router.post("/login", async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        employeeId: user.employeeId,
         isVerified: true,
         avatar: user.avatar,
         jobTitle: user.jobTitle,

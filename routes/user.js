@@ -89,7 +89,6 @@ router.post("/me", auth, upload.single("avatar"), async (req, res) => {
     if (typeof req.body.jobTitle !== "undefined") update.jobTitle = truncate(req.body.jobTitle, 80);
     if (typeof req.body.department !== "undefined") update.department = truncate(req.body.department, 80);
     if (typeof req.body.location !== "undefined") update.location = truncate(req.body.location, 120);
-    if (typeof req.body.employeeId !== "undefined") update.employeeId = truncate(req.body.employeeId, 40);
     if (typeof req.body.managerName !== "undefined") update.managerName = truncate(req.body.managerName, 80);
     if (typeof req.body.bio !== "undefined") update.bio = truncate(req.body.bio, 800);
     if (typeof req.body.skills !== "undefined") update.skills = truncate(req.body.skills, 400);
