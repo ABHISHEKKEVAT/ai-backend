@@ -16,7 +16,7 @@ const UserSchema = new mongoose.Schema({
   bio: { type: String, trim: true, default: "" },
   skills: { type: String, trim: true, default: "" },
   linkedinUrl: { type: String, trim: true, default: "" },
-  isVerified: { type: Boolean, default: false },
+  isVerified: { type: Boolean, default: true },
   emailToken: { type: String },
   emailVerifyCode: { type: String },
   emailVerifyCodeExpire: { type: Date },
