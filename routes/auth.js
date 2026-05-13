@@ -20,6 +20,34 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(value);
 }
 
+const PASSWORD_POLICY_TEXT =
+  "Password must be 8-64 characters and include uppercase, lowercase, number, and special character.";
+
+function validatePasswordPolicy(value) {
+  const password = String(value || "");
+
+  if (password.length < 8 || password.length > 64) {
+    return { ok: false, msg: PASSWORD_POLICY_TEXT };
+  }
+  if (/\s/.test(password)) {
+    return { ok: false, msg: "Password cannot contain spaces." };
+  }
+  if (!/[a-z]/.test(password)) {
+    return { ok: false, msg: "Password must include at least one lowercase letter." };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return { ok: false, msg: "Password must include at least one uppercase letter." };
+  }
+  if (!/[0-9]/.test(password)) {
+    return { ok: false, msg: "Password must include at least one number." };
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return { ok: false, msg: "Password must include at least one special character." };
+  }
+
+  return { ok: true, msg: "" };
+}
+
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -30,6 +58,10 @@ function findUserByEmail(email) {
 
 function normalizeRole(value) {
   return String(value || "").trim().toLowerCase() === "admin" ? "admin" : "user";
+}
+
+function normalizeCode(value) {
+  return String(value || "").trim();
 }
 
 function getEmployeeIdPrefix(role) {
@@ -109,12 +141,29 @@ router.post("/signup", async (req, res) => {
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
     const role = normalizeRole(req.body.role);
+    const adminCode = normalizeCode(req.body.adminCode);
 
     if (!name || !password) {
       return res.status(400).json({ msg: "Please fill all signup fields" });
     }
     if (!isValidEmail(email)) {
       return res.status(400).json({ msg: "Please enter a valid email address." });
+    }
+    const passwordValidation = validatePasswordPolicy(password);
+    if (!passwordValidation.ok) {
+      return res.status(400).json({ msg: passwordValidation.msg });
+    }
+    if (role === "admin") {
+      const expectedAdminCode = normalizeCode(process.env.ADMIN_SIGNUP_CODE);
+      if (!expectedAdminCode) {
+        return res.status(503).json({ msg: "Admin signup is not configured. Please contact system admin." });
+      }
+      if (!adminCode) {
+        return res.status(400).json({ msg: "Admin verification code is required." });
+      }
+      if (adminCode !== expectedAdminCode) {
+        return res.status(403).json({ msg: "Invalid admin verification code." });
+      }
     }
 
     const existingUser = await findUserByEmail(email);
@@ -269,8 +318,9 @@ router.post("/admin/reset-password", auth, async (req, res) => {
     const userId = String(req.body.userId || "").trim();
     const password = String(req.body.password || "");
 
-    if (!password || password.length < 6) {
-      return res.status(400).json({ msg: "Password must be at least 6 characters" });
+    const passwordValidation = validatePasswordPolicy(password);
+    if (!passwordValidation.ok) {
+      return res.status(400).json({ msg: passwordValidation.msg });
     }
 
     let user = null;

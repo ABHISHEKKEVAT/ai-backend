@@ -88,8 +88,12 @@ router.post("/me", auth, upload.single("avatar"), async (req, res) => {
     if (typeof req.body.phone !== "undefined") update.phone = truncate(req.body.phone, 32);
     if (typeof req.body.jobTitle !== "undefined") update.jobTitle = truncate(req.body.jobTitle, 80);
     if (typeof req.body.department !== "undefined") update.department = truncate(req.body.department, 80);
+    if (typeof req.body.team !== "undefined") update.team = truncate(req.body.team, 80);
+    if (typeof req.body.workMode !== "undefined") update.workMode = truncate(req.body.workMode, 40);
     if (typeof req.body.location !== "undefined") update.location = truncate(req.body.location, 120);
     if (typeof req.body.managerName !== "undefined") update.managerName = truncate(req.body.managerName, 80);
+    if (typeof req.body.emergencyContactName !== "undefined") update.emergencyContactName = truncate(req.body.emergencyContactName, 80);
+    if (typeof req.body.emergencyContactPhone !== "undefined") update.emergencyContactPhone = truncate(req.body.emergencyContactPhone, 32);
     if (typeof req.body.bio !== "undefined") update.bio = truncate(req.body.bio, 800);
     if (typeof req.body.skills !== "undefined") update.skills = truncate(req.body.skills, 400);
     if (typeof req.body.linkedinUrl !== "undefined") {
@@ -98,6 +102,20 @@ router.post("/me", auth, upload.single("avatar"), async (req, res) => {
         return res.status(400).json({ msg: "Invalid LinkedIn URL" });
       }
       update.linkedinUrl = normalizedLinkedinUrl;
+    }
+    if (typeof req.body.githubUrl !== "undefined") {
+      const normalizedGithubUrl = normalizeHttpUrl(req.body.githubUrl);
+      if (typeof normalizedGithubUrl === "undefined") {
+        return res.status(400).json({ msg: "Invalid GitHub URL" });
+      }
+      update.githubUrl = normalizedGithubUrl;
+    }
+    if (typeof req.body.portfolioUrl !== "undefined") {
+      const normalizedPortfolioUrl = normalizeHttpUrl(req.body.portfolioUrl);
+      if (typeof normalizedPortfolioUrl === "undefined") {
+        return res.status(400).json({ msg: "Invalid portfolio URL" });
+      }
+      update.portfolioUrl = normalizedPortfolioUrl;
     }
 
     if (typeof req.body.joinDate !== "undefined") {
